@@ -1,3 +1,4 @@
+import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { env } from "~/env.mjs";
 import {
@@ -5,6 +6,7 @@ import {
   protectedProcedure,
   publicProcedure,
 } from "~/server/api/trpc";
+import { posts, users } from "~/server/db";
 
 import {
   DeleteObjectCommand,
@@ -66,42 +68,44 @@ export const postRouter = createTRPCRouter({
         });
       }
 
-      const post = await ctx.prisma.post.create({
-        data: {
-          type: input.type,
-          user: {
-            connect: {
-              id: ctx.session.user.id,
-            },
-          },
-          image: imageId,
-        },
-        select: {
-          createdAt: true,
-          type: true,
-        },
+      const post = await ctx.db.insert(posts).values({
+        id: crypto.randomUUID(),
+        image: imageId,
+        type: input.type,
+        userId: ctx.session.user.id,
       });
 
-      if (!post) {
+      if (!post.rowsAffected) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to create post!",
         });
       }
 
-      await ctx.prisma.user.update({
-        where: {
-          id: ctx.session.user.id,
-        },
-        data: {
-          [`${input.type.toLowerCase()}PostCount`]: {
-            increment: 1,
-          },
-          imageCount: {
-            increment: 1,
-          },
-        },
-      });
+      await ctx.db
+        .update(users)
+        .set({
+          ...(input.type === PostType.OUTFIT && {
+            outfitPostCount: sql`${users.outfitPostCount} + 1`,
+          }),
+          ...(input.type === PostType.HOODIE && {
+            hoodiePostCount: sql`${users.hoodiePostCount} + 1`,
+          }),
+          ...(input.type === PostType.SHIRT && {
+            shirtPostCount: sql`${users.shirtPostCount} + 1`,
+          }),
+          ...(input.type === PostType.PANTS && {
+            pantsPostCount: sql`${users.pantsPostCount} + 1`,
+          }),
+          ...(input.type === PostType.SHOES && {
+            shoesPostCount: sql`${users.shoesPostCount} + 1`,
+          }),
+          ...(input.type === PostType.WATCH && {
+            watchPostCount: sql`${users.watchPostCount} + 1`,
+          }),
+          imageCount: sql`${users.imageCount} + 1`,
+        })
+        .where(eq(users.id, ctx.session.user.id));
 
       return {
         ...post,
@@ -119,18 +123,17 @@ export const postRouter = createTRPCRouter({
         endpoint: env.AWS_ENDPOINT,
       });
 
-      const post = await ctx.prisma.post.delete({
-        where: {
-          id,
-          userId: ctx.session.user.id,
-        },
-        select: {
-          type: true,
-          image: true,
-        },
-      });
+      const postResult = await ctx.db
+        .select({
+          id: posts.id,
+          type: posts.type,
+          image: posts.image,
+        })
+        .from(posts)
+        .where(and(eq(posts.id, id), eq(posts.userId, ctx.session.user.id)))
+        .then((res) => res[0]);
 
-      if (!post)
+      if (!postResult)
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Invalid post!",
@@ -139,26 +142,38 @@ export const postRouter = createTRPCRouter({
       s3.send(
         new DeleteObjectCommand({
           Bucket: "outfits",
-          Key: `${ctx.session.user.id}/${post.image}.png`,
+          Key: `${ctx.session.user.id}/${postResult.image}.png`,
         })
       );
 
-      await ctx.prisma.user.update({
-        where: {
-          id: ctx.session.user.id,
-        },
-        data: {
-          [`${post.type.toLowerCase()}PostCount`]: {
-            decrement: 1,
-          },
-          imageCount: {
-            decrement: 1,
-          },
-        },
-        select: {
-          id: true,
-        },
-      });
+      await ctx.db
+        .update(users)
+        .set({
+          ...(postResult.type === PostType.OUTFIT && {
+            outfitPostCount: sql`${users.outfitPostCount} - 1`,
+          }),
+          ...(postResult.type === PostType.HOODIE && {
+            hoodiePostCount: sql`${users.hoodiePostCount} - 1`,
+          }),
+          ...(postResult.type === PostType.SHIRT && {
+            shirtPostCount: sql`${users.shirtPostCount} - 1`,
+          }),
+          ...(postResult.type === PostType.PANTS && {
+            pantsPostCount: sql`${users.pantsPostCount} - 1`,
+          }),
+          ...(postResult.type === PostType.SHOES && {
+            shoesPostCount: sql`${users.shoesPostCount} - 1`,
+          }),
+          ...(postResult.type === PostType.WATCH && {
+            watchPostCount: sql`${users.watchPostCount} - 1`,
+          }),
+          imageCount: sql`${users.imageCount} - 1`,
+        })
+        .where(eq(users.id, ctx.session.user.id));
+
+      await ctx.db
+        .delete(posts)
+        .where(and(eq(posts.id, id), eq(posts.userId, ctx.session.user.id)));
 
       return true;
     }),
@@ -168,22 +183,18 @@ export const postRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const { id } = input;
 
-      const posts = await ctx.prisma.post.findMany({
-        where: {
-          userId: id,
-        },
-        select: {
-          id: true,
-          type: true,
-          image: true,
-          createdAt: true,
-        },
-        take: 20,
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
+      const postsResult = await ctx.db
+        .select({
+          id: posts.id,
+          type: posts.type,
+          image: posts.image,
+          createdAt: posts.createdAt,
+        })
+        .from(posts)
+        .where(eq(posts.userId, id))
+        .limit(20)
+        .orderBy(desc(posts.createdAt));
 
-      return posts;
+      return postsResult;
     }),
 });

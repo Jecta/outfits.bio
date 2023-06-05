@@ -1,8 +1,8 @@
 import { AppRouter } from "~/server/api/root";
+import { Post, PostType } from "~/server/db";
 import { api } from "~/utils/api.util";
 import { handleErrors } from "~/utils/handle-errors.util";
 
-import { Post, PostType } from "@prisma/client";
 import { inferRouterOutputs } from "@trpc/server";
 
 type RouterOutput = inferRouterOutputs<AppRouter>;

@@ -11,7 +11,7 @@ import { useDragAndDrop } from '~/hooks/drag-and-drop.hook';
 import { EditProfileInput, editProfileSchema } from '~/schemas/user.schema';
 import { appRouter } from '~/server/api/root';
 import { getServerAuthSession } from '~/server/auth';
-import { prisma } from '~/server/db';
+import { db } from '~/server/db';
 import { api } from '~/utils/api.util';
 import { handleErrors } from '~/utils/handle-errors.util';
 
@@ -178,7 +178,7 @@ export const getServerSideProps = async (context: GetServerSidePropsContext<{ us
 ) => {
     const helpers = createServerSideHelpers({
         router: appRouter,
-        ctx: { prisma, session: null },
+        ctx: { db, session: null },
         transformer: superjson, // optional - adds superjson serialization
     });
 

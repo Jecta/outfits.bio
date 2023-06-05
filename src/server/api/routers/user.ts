@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { env } from "~/env.mjs";
 import {
@@ -10,6 +11,7 @@ import {
   protectedProcedure,
   publicProcedure,
 } from "~/server/api/trpc";
+import { users } from "~/server/db";
 
 import {
   DeleteObjectCommand,
@@ -28,54 +30,43 @@ export const userRouter = createTRPCRouter({
     .query(async ({ input, ctx }) => {
       const { username } = input;
 
-      const user = await ctx.prisma.user.findUnique({
-        where: {
-          username,
-        },
-        select: {
-          username: true,
-        },
-      });
+      const userResult = await ctx.db
+        .select({ username: users.username })
+        .from(users)
+        .where(eq(users.username, username))
+        .then((res) => res[0] ?? null);
 
-      return !!user;
+      return !!userResult;
     }),
 
   getMe: protectedProcedure.query(async ({ ctx }) => {
-    const user = await ctx.prisma.user.findUnique({
-      where: {
-        id: ctx.session.user.id,
-      },
-      select: {
-        id: true,
-        username: true,
-        name: true,
-        image: true,
-        onboarded: true,
-      },
-    });
+    const userResult = await ctx.db
+      .select({
+        id: users.id,
+        username: users.username,
+        name: users.name,
+        image: users.image,
+        onboarded: users.onboarded,
+      })
+      .from(users)
+      .where(eq(users.id, ctx.session.user.id))
+      .then((res) => res[0] ?? null);
 
-    if (!user) {
+    if (!userResult) {
       throw new TRPCError({
         code: "NOT_FOUND",
         message: "User not found",
       });
     }
 
-    if (!user.onboarded) {
-      await ctx.prisma.user.update({
-        where: {
-          id: ctx.session.user.id,
-        },
-        data: {
-          onboarded: true,
-        },
-        select: {
-          id: true,
-        },
-      });
+    if (!userResult.onboarded) {
+      await ctx.db
+        .update(users)
+        .set({ onboarded: true })
+        .where(eq(users.id, ctx.session.user.id));
     }
 
-    return user;
+    return userResult;
   }),
 
   getProfile: publicProcedure
@@ -83,34 +74,33 @@ export const userRouter = createTRPCRouter({
     .query(async ({ input, ctx }) => {
       const { username } = input;
 
-      const user = await ctx.prisma.user.findUnique({
-        where: {
-          username,
-        },
-        select: {
-          id: true,
-          username: true,
-          name: true,
-          image: true,
-          hoodiePostCount: true,
-          outfitPostCount: true,
-          shirtPostCount: true,
-          shoesPostCount: true,
-          pantsPostCount: true,
-          watchPostCount: true,
-          imageCount: true,
-          likeCount: true,
-        },
-      });
+      const userResult = await ctx.db
+        .select({
+          id: users.id,
+          username: users.username,
+          name: users.name,
+          image: users.image,
+          hoodiePostCount: users.hoodiePostCount,
+          outfitPostCount: users.outfitPostCount,
+          shirtPostCount: users.shirtPostCount,
+          shoesPostCount: users.shoesPostCount,
+          pantsPostCount: users.pantsPostCount,
+          watchPostCount: users.watchPostCount,
+          imageCount: users.imageCount,
+          likeCount: users.likeCount,
+        })
+        .from(users)
+        .where(eq(users.username, username))
+        .then((res) => res[0] ?? null);
 
-      if (!user) {
+      if (!userResult) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "User not found",
         });
       }
 
-      return user;
+      return userResult;
     }),
 
   editProfile: protectedProcedure
@@ -130,20 +120,15 @@ export const userRouter = createTRPCRouter({
         });
 
       try {
-        const user = await ctx.prisma.user.update({
-          where: {
-            id: ctx.session.user.id,
-          },
-          data: {
-            name: name ? name : undefined,
-            username: username ? username : undefined,
-          },
-          select: {
-            username: true,
-          },
-        });
+        await ctx.db
+          .update(users)
+          .set({
+            ...(name ? { name } : {}),
+            ...(username ? { username } : {}),
+          })
+          .where(eq(users.id, ctx.session.user.id));
 
-        return user;
+        return { username };
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError) {
           if (error.code === "P2002") {
@@ -199,27 +184,31 @@ export const userRouter = createTRPCRouter({
       })
     );
 
-    await ctx.prisma.user.update({
-      where: {
-        id: ctx.session.user.id,
-      },
-      data: {
-        image: imageId,
-      },
-    });
+    await ctx.db
+      .update(users)
+      .set({ image: imageId })
+      .where(eq(users.id, ctx.session.user.id));
 
     return res;
   }),
 
   deleteImage: protectedProcedure.mutation(async ({ ctx }) => {
-    await ctx.prisma.user.update({
-      where: {
-        id: ctx.session.user.id,
-      },
-      data: {
-        image: null,
-      },
+    const s3 = new S3Client({
+      region: env.AWS_REGION,
+      endpoint: env.AWS_ENDPOINT,
     });
+
+    await ctx.db
+      .update(users)
+      .set({ image: null })
+      .where(eq(users.id, ctx.session.user.id));
+
+    s3.send(
+      new DeleteObjectCommand({
+        Bucket: "outfits",
+        Key: `${ctx.session.user.id}/${ctx.session.user.image}.png`,
+      })
+    );
 
     return true;
   }),
